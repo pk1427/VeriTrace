@@ -123,18 +123,18 @@ yet; the consent gate lands in Phase 2, before any search API is wired up.)
 
 ### Phase 2 — consent gate
 
-Subjects are enrolled into `data/consent_registry.json` as `{name: embedding}`
-(entries are git-ignored; the repo ships `data/consent_registry.example.json`).
+Subjects are enrolled into `data/consent_registry.json` as a `subjects` list of
+`{subject_id, embedding_b64, ...}` records (the biometric vector is never logged).
+The live registry is git-ignored; the repo ships `data/consent_registry.example.json`.
 
 ```bash
-# Enroll / overwrite a subject (detects first face in the image):
-python src/main.py enroll data/input/jane.jpg             # name auto-derived from filename stem
-python src/main.py enroll data/input/jane.jpg --name jane  # explicit name
+# Enroll an owner-identified subject (detects the first face in the image):
+python src/main.py enroll prasad data/input/prasad.jpg          # subject_id is required, explicit
+# Re-enrolling the same subject_id is refused (no silent overwrite).
 
-# Check whether an image's face is consented:
-python src/main.py check  data/input/face.jpg
-# -> consented: <name>            (cosine match in registry >= 0.60)
-# -> refused: <cosine> (< 0.60)   (below gate, fail-closed)
+python src/main.py check  data/input/face.jpg                   # fail-closed at 0.60
+# -> consented: prasad        (cosine match in registry >= 0.60)
+# -> refused: <score> < 0.60  (below gate)
 ```
 
 The gate is **fail-closed**: if the registry is empty, no face is detected, or the
@@ -142,13 +142,13 @@ best match is below `0.60`, the face is refused. `scan` remains a Phase-1 tool
 (embedding only) and does not enroll or check consent.
 
 ```bash
-# Phase 2 consent-gate unit tests (isolated temp registries, no real registry touched):
+# Phase 2 consent-gate tests (isolated temp registries, never touch the real one):
 python test/test_phase2_consent.py
 ```
 
-`test/test_phase2_consent.py` uses **synthetic** embeddings (NumPy only) and a
-throwaway temp registry, so it runs offline without faces and never mutates
-`data/consent_registry.json`.
+`test/test_phase2_consent.py` is **real-face-aware**: it auto-discovers sample photos
+in `test/samples/`. See "Test fixtures" for behavior when samples are absent
+(tests are skipped, not failed).
 
 ---
 
