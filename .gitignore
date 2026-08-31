@@ -1,0 +1,37 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+build/
+dist/
+
+# Environment / secrets
+.env
+.env.local
+*.env
+
+# InsightFace / face model caches (can be large)
+.insightface/
+.model-cache/
+~/.insightface/
+
+# Node / Hardhat (Phase 3)
+node_modules/
+contracts/artifacts/
+contracts/cache/
+coverage/
+.typechain/
+hardhat-node/
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Test / data fixtures
+.pytest_cache/
+.mypy_cache/
+*.prof
+data/evidence/*
+!data/evidence/.gitkeep

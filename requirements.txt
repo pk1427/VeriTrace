@@ -1,0 +1,19 @@
+numpy==1.26.4
+onnx==1.19.1
+onnxruntime==1.18.1
+opencv-python-headless==4.10.0.84
+insightface==0.7.3
+scikit-image==0.24.0
+scikit-learn==1.6.1
+scipy==1.13.1
+Pillow==10.4.0
+tqdm==4.66.5
+
+# --- Fallback face backend (only needed if InsightFace cannot be installed) ---
+# face_recognition==1.3.0
+# dlib==19.24.2
+# NOTE: dlib has no prebuilt macOS/CPython wheels and compiles from source,
+# which requires CMake + a C++17 toolchain. The InsightFace stack above is the
+# preferred, fully wheel-based install and is what produces 512-dim ArcFace
+# embeddings. Install the fallback only when the InsightFace stack is
+# problematic on your machine.
