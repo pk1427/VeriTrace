@@ -113,7 +113,11 @@ def _rpc(payload: dict, rpc_url: str, timeout: float = 30.0) -> dict:
     req = urllib.request.Request(
         rpc_url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "veritrace/0.1",
+        },
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -171,6 +175,22 @@ def _gas_price(rpc_url: str) -> int:
     return int(res["result"], 16) + 1_000_000_000
 
 
+def _wait_for_receipt(tx_hash: str, rpc_url: str, timeout: float = 90.0) -> dict:
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        res = _rpc(
+            {"jsonrpc": "2.0", "method": "eth_getTransactionReceipt",
+             "params": [tx_hash], "id": 1},
+            rpc_url,
+        )
+        if res.get("result"):
+            return res["result"]
+        time.sleep(2)
+    raise RuntimeError(f"tx not mined within {int(timeout)}s: {tx_hash}")
+
+
 def anchor_evidence(
     subject_id: str,
     image_path: str,
@@ -215,13 +235,20 @@ def anchor_evidence(
         "chainId": _chain_id(rpc_url),
     }
     signed = Account.sign_transaction(tx, private_key)
-    res = _rpc(
+    send = _rpc(
         {"jsonrpc": "2.0", "method": "eth_sendRawTransaction",
          "params": ["0x" + signed.raw_transaction.hex()], "id": 1},
         rpc_url,
     )
-    payload["tx_hash"] = res["result"]
-    payload["_status"] = "submitted"
+    tx_hash = send["result"]
+    receipt = _wait_for_receipt(tx_hash, rpc_url)
+    ok = receipt.get("status") == "0x1"
+    payload["tx_hash"] = tx_hash
+    payload["block_number"] = int(receipt["blockNumber"], 16)
+    payload["gas_used"] = int(receipt["gasUsed"], 16)
+    payload["_status"] = "mined" if ok else "reverted"
+    if not ok:
+        raise RuntimeError(f"anchor tx reverted: {tx_hash}")
     return payload
 
 

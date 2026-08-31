@@ -252,10 +252,36 @@ def cmd_blockchain_deploy(args: argparse.Namespace) -> int:
     return int(proc.returncode)
 
 
+def cmd_search(args: argparse.Namespace) -> int:
+    from src.search import default_allowed_domains, search as web_search
+
+    result = _run_gate(args)
+    _print("[veritrace] gate        :", "OPEN" if result.granted else "CLOSED")
+    if not result.granted:
+        _print(result.message)
+        _print("[veritrace] gate        : CLOSED — refusing to search (unenrolled face)")
+        return 1
+
+    allowed = default_allowed_domains()
+    try:
+        matches = web_search(args.image, allowed, max_results=args.max_results)
+    except Exception as exc:
+        _print(f"refusal: reverse-image search failed — {type(exc).__name__}: {exc}")
+        return 1
+
+    _print(f"[veritrace] subject     : {result.best_subject}")
+    _print(f"[veritrace] matches     : {len(matches)} (allow-list={','.join(allowed)})")
+    for m in matches[: args.max_results]:
+        _print(f"  - {m.get('domain') or m.get('host')}  {m['url'][:120]}")
+    _print("[veritrace] gate        : OPEN — results filtered to approved domains only")
+    _print("[veritrace] status      : ok")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="veritrace",
-        description="Consent-gated face verification + blockchain pipeline (Phase 2: consent gate).",
+        description="Consent-gated face verification + blockchain pipeline (Phase 2 consent gate, Phase 3 evidence/chain).",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -284,16 +310,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p_check.set_defaults(func=cmd_check)
 
     p_search = sub.add_parser(
-        "search", help="Phase 2 live reverse-image search (web layer not built yet)."
+        "search", help="Consent-gated reverse-image search of approved domains (Phase 2b).",
     )
     p_search.add_argument("image", help="Face photo to search (consent-gated).")
     p_search.add_argument("--registry", type=Path, default=None,
                           help="Override consent registry path (default: data/consent_registry.json).")
     p_search.add_argument("--threshold", type=float, default=None,
                           help="Override the consent cosine threshold (default 0.6).")
-    p_search.set_defaults(func=_not_implemented(
-        "search", "live reverse-image search is deferred (Phase 2 web layer not built)."
-    ))
+    p_search.add_argument("--max-results", type=int, default=10,
+                          help="Max web-detection matches per image (default 10).")
+    p_search.set_defaults(func=cmd_search)
 
     p_ev = sub.add_parser(
         "evidence", help="Fingerprint an image into tamper-evident SHA-256 evidence (consent-gated)."

@@ -18,6 +18,14 @@ tqdm==4.66.5
 # embeddings. Install the fallback only when the InsightFace stack is
 # problematic on your machine.
 
+# --- Phase 2b: Google Cloud Vision reverse-image search (consent-gated) ---
+# Uses Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS in .env).
+# google-cloud-vision pulls: google-api-core, google-auth, google-cloud-core,
+# googleapis-common-protos, grpcio, proto-plus (wheels are available for macOS).
+# NOTE: the Vision API requires billing enabled on the GCP project to call
+# web_detection (reverse-image search) — see README (Phase 2b) for the toggle.
+google-cloud-vision>=3.1.0
+
 # --- Phase 3: Ethereum on-chain evidence anchoring (Polygon Amoy) ---
 # eth-account pulls: eth-abi, eth-utils, eth-keys, eth-rlp, hexbytes, rlp,
 # cytoolz, toolz (all pure-python wheels; no C toolchain required). The

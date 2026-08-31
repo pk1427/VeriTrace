@@ -176,6 +176,25 @@ npx hardhat run scripts/deploy.js --network localhost  # local dev node, no secr
 npx hardhat run scripts/deploy.js --network amoy       # needs POLYGON_AMOY_RPC_URL + PRIVATE_KEY (.env, git-ignored)
 ```
 
+### Deployments
+
+| Network | Address | Explorer |
+| --- | --- | --- |
+| Polygon Amoy | `0x6650630946313835E5a1175ddE8F9969674fbE28` | [amoy.polygonscan.com](https://amoy.polygonscan.com/address/0x6650630946313835E5a1175ddE8F9969674fbE28) |
+
+**Live end-to-end (Phase 3, Polygon Amoy):** consent-gated anchor of `your_photo2.jpeg`
+for enrolled subject `prasad` (consent score 0.7234 >= 0.60):
+
+- evidence fingerprint (`SHA-256`): `a12b1983dda609a2796d7cbaa1673dc6eaf515c3cf3d40dd53564db55cb6b620`
+- anchor tx: `0x41cb0c58fb370db0d53a2eeeb0d827993d2e945359e1504af4178c821eb4150b` — status `0x1` (success), block `46394697`, gas used `127067`, submitter `0x659f1ddf3Afa31029B990D2202Df8B2094eE012E`.
+- on-chain `verify` → `RECORDED` (submitter + timestamp match).
+- tamper demo: a single byte flipped in the same image yields fingerprint `5932b78547ede936d0aaeb07dc0105bd5b0f2e748231937d7ed4628b5f646ba6` → `isRecorded` = `false` → `UNRECORDED`.
+
+Redeploying (`veritrace blockchain deploy --network amoy`) mints a fresh address;
+re-anchor evidence to it. The on-chain record is the single source of truth:
+`veritrace blockchain verify` re-hashes the image off-chain and checks
+`isRecorded(hash)`.
+
 The evidence fingerprint is `SHA-256(image bytes)`. Any byte change produces a
 different hash that the on-chain record no longer matches — tampering is
 detectable by re-hashing off-chain and calling `isRecorded(hash)`.
@@ -194,6 +213,9 @@ python test/test_phase1_e2e.py
 # Phase 2 consent gate — auto-discovers real face samples; isolated temp
 # registries. Skipped (not failed) if samples are absent:
 python test/test_phase2_consent.py
+
+# Phase 2b search allow-list (offline, no GCP creds needed):
+python test/test_search.py
 
 # Phase 3 evidence + blockchain clients (offline, no node needed):
 python test/test_evidence.py
@@ -236,17 +258,28 @@ unsigned-anchor path. It monkey-patches the JSON-RPC layer, so it runs
 offline with no node. The full on-chain round-trip (sign → mine → verify) is
 exercised by `test/EvidenceRegistry.test.js` under Hardhat instead.
 
+`test/test_search.py` exercises the reverse-image-search allow-list in pure Python: only
+URLs whose host matches `VERIFACE_ALLOWED_DOMAINS` (default `wikipedia.org`,
+`commons.wikimedia.org`, `unsplash.com`, `pexels.com`) are kept; subdomain + suffix
+rules block lookalikes like `notwikipedia.org` and `evil.example.com`. No model, no
+network, no GCP credentials — always runs offline. The live Vision call is exercised
+manually via `veritrace search <image>` (see Phase 2b: requires billing + a service
+-account key in `GOOGLE_APPLICATION_CREDENTIALS`).
+
 ---
 
 ## Phases (in order, each confirmed before building)
 
 1. **Face scan** — detect + 512-dim embedding (✅ checkpoint).
 2. **Consent gate + live search** — enroll subjects, fail-closed refusal below 0.60 cosine (✅
-   consent gate live & tested; web reverse-image search **deferred** — Phase 2 layer not built).
+   consent gate live & tested; web reverse-image search **implemented** via Google Cloud Vision
+   `WEB_DETECTION` + domain allow-list — `veritrace search <image>` runs behind the consent
+   gate. Live calls require a GCP service-account key + billing enabled on the project; the
+   allow-list filtering is covered offline by `test/test_search.py`).
 3. **Evidence + chain** — SHA-256 fingerprint, Solidity Hardhat contract on Polygon Amoy, on-chain
    upload + independent re-verification, tamper demo
-   (✅ **locally verified end-to-end** on a Hardhat node: a real signed `addRecord`
-   transaction was mined, `verify`/`isRecorded` `eth_call` returns `RECORDED`, and a
-   byte-flip tamper produces a different fingerprint that is `UNRECORDED`; **Amoy
-   deployment is opt-in** — it requires a funded `POLYGON_AMOY_RPC_URL` + `PRIVATE_KEY`
-   in the git-ignored `.env` and an explicit `veritrace blockchain deploy --network amoy`).
+   (✅ **validated end-to-end**: locally on a Hardhat node (signed `addRecord` tx mined,
+   `verify`/`isRecorded` `eth_call` → `RECORDED`, byte-flip tamper → `UNRECORDED`); and
+   on **Polygon Amoy** — see Deployments below. Requires a funded
+   `POLYGON_AMOY_RPC_URL` + `PRIVATE_KEY` in the git-ignored `.env`; deploy with
+   `npx hardhat run scripts/deploy.js --network amoy`).
