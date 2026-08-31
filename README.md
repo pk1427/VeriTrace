@@ -121,6 +121,35 @@ refusal: no face detected in the supplied image — nothing to embed.
 (Phase 1 has no web search, so there is no unenrolled-face search path to gate
 yet; the consent gate lands in Phase 2, before any search API is wired up.)
 
+### Phase 2 — consent gate
+
+Subjects are enrolled into `data/consent_registry.json` as `{name: embedding}`
+(entries are git-ignored; the repo ships `data/consent_registry.example.json`).
+
+```bash
+# Enroll / overwrite a subject (detects first face in the image):
+python src/main.py enroll data/input/jane.jpg             # name auto-derived from filename stem
+python src/main.py enroll data/input/jane.jpg --name jane  # explicit name
+
+# Check whether an image's face is consented:
+python src/main.py check  data/input/face.jpg
+# -> consented: <name>            (cosine match in registry >= 0.60)
+# -> refused: <cosine> (< 0.60)   (below gate, fail-closed)
+```
+
+The gate is **fail-closed**: if the registry is empty, no face is detected, or the
+best match is below `0.60`, the face is refused. `scan` remains a Phase-1 tool
+(embedding only) and does not enroll or check consent.
+
+```bash
+# Phase 2 consent-gate unit tests (isolated temp registries, no real registry touched):
+python test/test_phase2_consent.py
+```
+
+`test/test_phase2_consent.py` uses **synthetic** embeddings (NumPy only) and a
+throwaway temp registry, so it runs offline without faces and never mutates
+`data/consent_registry.json`.
+
 ---
 
 ## Tests
@@ -131,6 +160,10 @@ python test/test_matcher.py
 
 # Full pipeline on real faces — supply samples/test/samples/*.jpg first:
 python test/test_phase1_e2e.py
+
+# Phase 2 consent gate — auto-discovers real face samples in test/samples/;
+# isolated temp registries. Skipped (not failed) if samples are absent:
+python test/test_phase2_consent.py
 ```
 
 ### Test fixtures
@@ -144,12 +177,24 @@ photos. Place four face images in `test/samples/` (see `test/samples/README.md`)
 `same_a.jpg`, `same_b.jpg` (one person) and `diff_a.jpg`, `diff_b.jpg`
 (two people). The test is skipped (not failed) until you supply them.
 
+`test/test_phase2_consent.py` is **real-face-aware**: it auto-discovers a small
+set of sample photos in `test/samples/` (any of the conventional or descriptive
+names — `your_photo1.jpeg`, `your_photo2.jpeg`, `teammate_photo.jpeg`,
+`same_a`/`same_b`/`diff_a`/`diff_b`). When present it enrolls one subject and
+asserts the gate **grants** the same person (>= 0.60) and **refuses** a
+different person (< 0.60). When a sample set is missing, the affected test is
+**skipped**, not failed. All enrollments use an **isolated temporary registry**
+under the system temp dir — `data/consent_registry.json` is never read or
+written. The empty-registry test additionally uses a synthetic black placeholder
+to verify a face is **never embedded** when nobody is enrolled (fail closed).
+
 ---
 
 ## Phases (in order, each confirmed before building)
 
 1. **Face scan** — detect + 512-dim embedding (✅ this checkpoint).
-2. **Consent gate + live search** — enroll subjects, refuse unenrolled faces,
-   reverse-image search approved scope, verify candidates.
+2. **Consent gate + live search** — enroll subjects, fail-closed refusal below 0.60 cosine,
+   reverse-image search approved scope, verify candidates (✅ consent gate live & tested;
+   web search pending Phase 3).
 3. **Evidence + chain** — SHA-256 fingerprint, Solidity Hardhat contract on
    Polygon Amoy, on-chain upload + independent re-verification, tamper demo.

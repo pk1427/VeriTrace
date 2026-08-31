@@ -36,6 +36,10 @@ Thumbs.db
 data/evidence/*
 !data/evidence/.gitkeep
 
+# Local consent registry — stores owner face embeddings (biometric data).
+# Keep it LOCAL only; never commit. Use consent_registry.example.json as a template.
+data/consent_registry.json
+
 # Real face photos used for the Phase 1 e2e threshold test — keep these LOCAL
 # only (do not publish biometric data of you / teammates into the repo).
 # The test README under this folder documents the expected filenames.

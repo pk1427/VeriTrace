@@ -1,0 +1,6 @@
+{
+  "version": "0.2.0",
+  "description": "VeriTrace local consent registry (owner-enrolled subjects only). Empty template — copy to consent_registry.json and enroll subjects; the live file is git-ignored.",
+  "match_threshold": 0.6,
+  "subjects": []
+}

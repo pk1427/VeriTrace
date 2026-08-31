@@ -1,5 +1,0 @@
-{
-  "description": "VeriTrace local consent registry (Phase 2 structure). Phase 1 does not implement the consent gate; it only stores local face data. Empty by default.",
-  "subjects": [],
-  "version": "0.1.0"
-}

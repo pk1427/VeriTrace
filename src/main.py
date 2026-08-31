@@ -73,10 +73,58 @@ def cmd_scan(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_enroll(args: argparse.Namespace) -> int:
+    from src.consent.registry import enroll, is_enrolled, REGISTRY_PATH
+
+    image = args.image
+    p = Path(image)
+    if not p.is_file():
+        _print(f"error: enrollment image not found: {image}")
+        return 2
+    if is_enrolled(args.subject_id, args.registry):
+        _print(f"refusal: subject '{args.subject_id}' is already enrolled — refusing to overwrite.")
+        return 1
+
+    try:
+        rec = enroll(args.subject_id, str(p), path=args.registry)
+    except ValueError as exc:
+        _print(f"refusal: {exc}")
+        return 1
+
+    _print(f"[veritrace] enrolled  : subject_id={rec['subject_id']}")
+    _print(f"[veritrace] enrolled  : photo={rec['enrollment_photo']} sha256={rec['enrollment_sha256'][:16]}…")
+    _print(f"[veritrace] enrolled  : dim={rec['embedding_dim']} (512-d ArcFace) at={rec['enrolled_at']}")
+    _print(f"[veritrace] registry  : {args.registry or REGISTRY_PATH}  (local, git-ignored)")
+    _print("[veritrace] status    : ok")
+    return 0
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    from src.consent.registry import check_consent, list_subjects, REGISTRY_PATH
+
+    image = args.image
+    p = Path(image)
+    if not p.is_file():
+        _print(f"error: input image not found: {image}")
+        return 2
+
+    result = check_consent(str(p), threshold=args.threshold, path=args.registry)
+    subs = list_subjects(args.registry)
+    _print(f"[veritrace] backend    : (see scan)")
+    _print(f"[veritrace] registry   : {args.registry or REGISTRY_PATH}")
+    _print(f"[veritrace] enrolled   : {subs if subs else 'none'}")
+    _print(result.message)
+    if result.granted:
+        _print("[veritrace] gate       : OPEN — may proceed to search (Phase 3)")
+        return 0
+    _print("[veritrace] gate       : CLOSED — refusing to proceed (unenrolled face)")
+    return 1
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="veritrace",
-        description="Consent-gated face verification + blockchain pipeline (Phase 1: scan).",
+        description="Consent-gated face verification + blockchain pipeline (Phase 2: consent gate).",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -85,9 +133,28 @@ def _build_parser() -> argparse.ArgumentParser:
     p_scan.add_argument("--verbose", action="store_true", help="Verbose output.")
     p_scan.set_defaults(func=cmd_scan)
 
+    p_enroll = sub.add_parser(
+        "enroll", help="Enroll an owner-owned face into the local consent registry."
+    )
+    p_enroll.add_argument("subject_id", help="Owner-identified subject id, e.g. 'prasad'.")
+    p_enroll.add_argument("image", help="Clear face photo of the owner to enroll.")
+    p_enroll.add_argument("--registry", type=Path, default=None,
+                          help="Override registry path (default: data/consent_registry.json).")
+    p_enroll.set_defaults(func=cmd_enroll)
+
+    p_check = sub.add_parser(
+        "check", help="Run the consent gate on an image (must OPEN before any search)."
+    )
+    p_check.add_argument("image", help="Face photo to verify consent for.")
+    p_check.add_argument("--threshold", type=float, default=None,
+                         help="Override the consent cosine threshold (default 0.6).")
+    p_check.add_argument("--registry", type=Path, default=None,
+                         help="Override registry path (default: data/consent_registry.json).")
+    p_check.set_defaults(func=cmd_check)
+
     # Reserved subcommand slots for later phases (implemented only after
     # explicit confirmation). They intentionally error out now.
-    for name in ("consent", "search", "evidence", "blockchain"):
+    for name in ("search", "evidence", "blockchain"):
         p = sub.add_parser(name, help=f"[Phase N] {name} — not implemented yet.")
         p.set_defaults(func=_not_implemented(name))
 
@@ -96,8 +163,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _not_implemented(name: str):
     def _run(args: argparse.Namespace) -> int:  # pragma: no cover - gated by design
-        print(f"refusal: '{name}' is not implemented in Phase 1.", file=sys.stderr)
-        print("Ask the operator to confirm before touching anything outside src/face/.", file=sys.stderr)
+        print(f"refusal: '{name}' is not implemented (Phase 2).", file=sys.stderr)
+        print("Ask the operator to confirm before starting Phase 3.", file=sys.stderr)
         return 62
     return _run
 
