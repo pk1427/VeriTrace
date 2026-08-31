@@ -35,3 +35,13 @@ Thumbs.db
 *.prof
 data/evidence/*
 !data/evidence/.gitkeep
+
+# Real face photos used for the Phase 1 e2e threshold test — keep these LOCAL
+# only (do not publish biometric data of you / teammates into the repo).
+# The test README under this folder documents the expected filenames.
+test/samples/*.jpg
+test/samples/*.jpeg
+test/samples/*.png
+test/samples/*.webp
+test/samples/*.heic
+!test/samples/README.md
