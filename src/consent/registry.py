@@ -57,6 +57,7 @@ class ConsentResult:
     threshold: float
     best_subject: Optional[str]
     message: str
+    allowed_domains: Optional[list] = None
 
     def as_dict(self) -> dict:
         return {
@@ -64,6 +65,7 @@ class ConsentResult:
             "matched_subject": self.best_subject if self.granted else None,
             "score": self.best_score,
             "threshold": self.threshold,
+            "allowed_domains": self.allowed_domains,
             "message": self.message,
         }
 
@@ -134,7 +136,21 @@ def list_subjects(path: Optional[Path] = None) -> list:
     return [s.get("subject_id") for s in reg.get("subjects", [])]
 
 
+def get_subject(subject_id: str, path: Optional[Path] = None) -> Optional[dict]:
+    """Return the raw enrollment record for ``subject_id`` (or None).
+
+    Used by Phase 2b to read the owner's per-owner ``allowed_domains`` search
+    scope without re-running the face comparison.
+    """
+    reg = load_registry(path)
+    for subj in reg.get("subjects", []):
+        if subj.get("subject_id") == subject_id:
+            return subj
+    return None
+
+
 def enroll(subject_id: str, image_path: str, threshold: float = DEFAULT_THRESHOLD,
+           allowed_domains: Optional[list] = None,
            path: Optional[Path] = None) -> dict:
     """Enroll an owner-owned face.
 
@@ -143,6 +159,10 @@ def enroll(subject_id: str, image_path: str, threshold: float = DEFAULT_THRESHOL
       2. Refuse if no face is detected.
       3. Refuse if ``subject_id`` is already enrolled (no silent overwrite).
       4. Persist the record to the git-ignored registry.
+
+    ``allowed_domains`` (if provided) is the **per-owner** search scope: Phase 2b's
+    reverse-image search will only return results from these hosts for this owner.
+    When omitted it is stored as ``None`` and the caller falls back to its default.
 
     Returns the enrollment record (without echoing the raw embedding).
     """
@@ -158,6 +178,7 @@ def enroll(subject_id: str, image_path: str, threshold: float = DEFAULT_THRESHOL
         raise RuntimeError(f"Expected {EMBED_DIM}-dim embedding, got {emb.shape[0]}.")
 
     sha = image_sha256(str(p))
+    domains = [str(d).strip().lower() for d in (allowed_domains or []) if str(d).strip()] or None
     record = {
         "subject_id": subject_id,
         "enrollment_photo": p.name,
@@ -165,6 +186,7 @@ def enroll(subject_id: str, image_path: str, threshold: float = DEFAULT_THRESHOL
         "embedding_b64": base64.b64encode(emb.tobytes()).decode("ascii"),
         "embedding_dim": EMBED_DIM,
         "enrolled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "allowed_domains": domains,
     }
 
     reg = load_registry(path)
@@ -230,16 +252,20 @@ def check_consent(image_path: str, threshold: Optional[float] = None,
 
     best_score: Optional[float] = None
     best_subject: Optional[str] = None
+    best_record: Optional[dict] = None
     for subj in subjects:
         emb = _decode_embedding(subj)
         if emb is None:
             continue
         score = cosine_similarity(input_emb, emb)
         if best_score is None or score > best_score:
-            best_score, best_subject = score, subj.get("subject_id")
+            best_score, best_subject, best_record = score, subj.get("subject_id"), subj
 
     assert best_score is not None and best_subject is not None
     granted = bool(best_score >= gate_threshold)
+    # Per-owner search scope: the matched subject's own approved domains (may be
+    # None for legacy enrollments → Phase 2b falls back to its default list).
+    owner_domains = (best_record or {}).get("allowed_domains")
     if granted:
         message = (f"consent: GRANTED — input matches enrolled subject "
                    f"'{best_subject}' (score={best_score:.4f} >= {gate_threshold}).")
@@ -249,7 +275,7 @@ def check_consent(image_path: str, threshold: Optional[float] = None,
     return ConsentResult(
         granted=granted, subject_id=best_subject if granted else None,
         best_score=best_score, threshold=gate_threshold,
-        best_subject=best_subject, message=message,
+        best_subject=best_subject, message=message, allowed_domains=owner_domains,
     )
 
 

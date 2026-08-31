@@ -36,6 +36,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 # Allow `python src/main.py ...` to resolve `src` as a package from repo root.
 _ROOT = Path(__file__).resolve().parent.parent
@@ -111,15 +112,20 @@ def cmd_enroll(args: argparse.Namespace) -> int:
         _print(f"refusal: subject '{args.subject_id}' is already enrolled — refusing to overwrite.")
         return 1
 
+    allowed_domains = None
+    if args.allowed_domains:
+        allowed_domains = [d.strip().lower() for d in args.allowed_domains.split(",") if d.strip()]
+
     try:
-        rec = enroll(args.subject_id, str(p), path=args.registry)
-    except ValueError as exc:
+        rec = enroll(args.subject_id, str(p), path=args.registry, allowed_domains=allowed_domains)
+    except (ValueError, FileNotFoundError) as exc:
         _print(f"refusal: {exc}")
         return 1
 
     _print(f"[veritrace] enrolled  : subject_id={rec['subject_id']}")
     _print(f"[veritrace] enrolled  : photo={rec['enrollment_photo']} sha256={rec['enrollment_sha256'][:16]}…")
     _print(f"[veritrace] enrolled  : dim={rec['embedding_dim']} (512-d ArcFace) at={rec['enrolled_at']}")
+    _print(f"[veritrace] scope     : allowed_domains={','.join(allowed_domains) if allowed_domains else '<none -> default>'}")
     _print(f"[veritrace] registry  : {args.registry or REGISTRY_PATH}  (local, git-ignored)")
     _print("[veritrace] status    : ok")
     return 0
@@ -253,7 +259,8 @@ def cmd_blockchain_deploy(args: argparse.Namespace) -> int:
 
 
 def cmd_search(args: argparse.Namespace) -> int:
-    from src.search import default_allowed_domains, search as web_search
+    from src.search import default_allowed_domains, filter_allowed_urls, fetch_candidate, web_detection
+    from src.face import encode_largest_face, detect_largest_face, cosine_similarity
 
     result = _run_gate(args)
     _print("[veritrace] gate        :", "OPEN" if result.granted else "CLOSED")
@@ -262,18 +269,69 @@ def cmd_search(args: argparse.Namespace) -> int:
         _print("[veritrace] gate        : CLOSED — refusing to search (unenrolled face)")
         return 1
 
-    allowed = default_allowed_domains()
+    # Fix 2: scope comes from the matched owner's registry entry, NOT a global env var.
+    owner_domains = [d for d in (result.allowed_domains or []) if d]
+    if owner_domains:
+        allowed, scope_kind = owner_domains, "owner-allowed_domains"
+    else:
+        allowed, scope_kind = default_allowed_domains(), "fallback-default"
+    threshold = args.threshold if args.threshold is not None else result.threshold
+
+    _print(f"[veritrace] subject     : {result.best_subject} (score={result.best_score:.4f} >= {result.threshold})")
+    _print(f"[veritrace] scope       : {scope_kind} = {','.join(allowed)}")
+
     try:
-        matches = web_search(args.image, allowed, max_results=args.max_results)
+        raw_matches = web_detection(args.image, max_results=args.max_results)
+        candidates = filter_allowed_urls(raw_matches, allowed)
     except Exception as exc:
         _print(f"refusal: reverse-image search failed — {type(exc).__name__}: {exc}")
         return 1
 
-    _print(f"[veritrace] subject     : {result.best_subject}")
-    _print(f"[veritrace] matches     : {len(matches)} (allow-list={','.join(allowed)})")
-    for m in matches[: args.max_results]:
-        _print(f"  - {m.get('domain') or m.get('host')}  {m['url'][:120]}")
-    _print("[veritrace] gate        : OPEN — results filtered to approved domains only")
+    _print(f"[veritrace] vision      : {len(raw_matches)} raw web-detection result(s)")
+    _print(f"[veritrace] candidates  : {len(candidates)} after domain filter")
+
+    # Reference embedding = the searched face (self-contained, no shared state).
+    try:
+        reference = encode_largest_face(args.image, normalize=True)
+    except Exception as exc:
+        _print(f"refusal: input face could not be embedded for verification — {type(exc).__name__}: {exc}")
+        return 1
+
+    # Fix 1: face-similarity verification of every fetched candidate.
+    verified, rejected = [], []
+    for c in candidates[: args.max_results]:
+        url = c.get("url", "")
+        host = c.get("domain") or c.get("host") or (urlparse(url).hostname or "")
+        path, _ct, reason = fetch_candidate(url)
+        if path is None:
+            rejected.append((host, url, f"fetch failed: {reason}"))
+            _print(f"  x {host or '?'}  {url[:95]}  ... {reason}  [rejected]")
+            continue
+        try:
+            if detect_largest_face(path) is None:
+                rejected.append((host, url, "no face in fetched image"))
+                _print(f"  x {host}  {url[:95]}  ... no face detected  [rejected]")
+                continue
+            cand = encode_largest_face(path, normalize=True)
+            score = cosine_similarity(reference, cand)
+            if score >= threshold:
+                verified.append((host, url, score))
+                _print(f"  + {host}  {url[:95]}  similarity={score:.4f}  [VERIFIED]")
+            else:
+                rejected.append((host, url, f"similarity={score:.4f} < {threshold}"))
+                _print(f"  - {host}  {url[:95]}  similarity={score:.4f}  [rejected]")
+        except Exception as exc:
+            rejected.append((host, url, f"verify error: {type(exc).__name__}: {exc}"))
+            _print(f"  - {host}  {url[:95]}  ... {exc}  [rejected]")
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+    _print(f"[veritrace] result      : {len(verified)} verified match(es), "
+           f"{len(rejected)} rejected (below threshold / no face / fetch failure)")
+    _print("[veritrace] gate        : OPEN — results are owner-domain-scoped + face-verified")
     _print("[veritrace] status      : ok")
     return 0
 
@@ -295,6 +353,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_enroll.add_argument("subject_id", help="Owner-identified subject id, e.g. 'prasad'.")
     p_enroll.add_argument("image", help="Clear face photo of the owner to enroll.")
+    p_enroll.add_argument("--allowed-domains", default=None,
+                          help="Owner-specific comma-separated search domain scope "
+                               "(e.g. 'linkedin.com,wikipedia.org'). Omit for the default list.")
     p_enroll.add_argument("--registry", type=Path, default=None,
                           help="Override registry path (default: data/consent_registry.json).")
     p_enroll.set_defaults(func=cmd_enroll)
