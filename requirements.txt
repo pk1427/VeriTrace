@@ -17,3 +17,12 @@ tqdm==4.66.5
 # preferred, fully wheel-based install and is what produces 512-dim ArcFace
 # embeddings. Install the fallback only when the InsightFace stack is
 # problematic on your machine.
+
+# --- Phase 3: Ethereum on-chain evidence anchoring (Polygon Amoy) ---
+# eth-account pulls: eth-abi, eth-utils, eth-keys, eth-rlp, hexbytes, rlp,
+# cytoolz, toolz (all pure-python wheels; no C toolchain required). The
+# owner private key is read from the git-ignored .env (PRIVATE_KEY) only.
+python-dotenv==1.2.1
+eth-hash==0.7.1
+pycryptodome==3.23.0
+eth-account==0.13.7

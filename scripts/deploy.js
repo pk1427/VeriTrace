@@ -1,13 +1,14 @@
-/**
- * Phase 3 scaffold — deploy script for EvidenceRegistry.sol.
- * Not implemented yet; placeholder so the repo layout is complete.
- *
- * Expected (Phase 3):
- *   npx hardhat run scripts/deploy.js --network amoy
- *   # or local fallback node: --network localhost
- */
+const hre = require("hardhat");
+
 async function main() {
-  console.log("deploy not implemented (Phase 3).");
+  const factory = await hre.ethers.getContractFactory("EvidenceRegistry");
+  const contract = await factory.deploy();
+  await contract.waitForDeployment();
+  const addr = contract.target || contract.address;
+  console.log("EvidenceRegistry deployed to:", addr);
+  if (hre.network.name === "amoy") {
+    console.log("Verify: npx hardhat verify --network amoy", addr);
+  }
 }
 
 main().catch((error) => {

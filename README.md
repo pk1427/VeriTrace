@@ -150,20 +150,58 @@ python test/test_phase2_consent.py
 in `test/samples/`. See "Test fixtures" for behavior when samples are absent
 (tests are skipped, not failed).
 
+### Phase 3 — evidence + chain
+
+Evidence is produced and anchored behind the **consent gate**: `check` must be
+OPEN for the face before any fingerprint is taken or any on-chain call is made.
+
+```bash
+# 1) consent-gate an image (must be OPEN):
+python src/main.py check data/input/face.jpg
+
+# 2) fingerprint -> tamper-evident SHA-256 evidence JSON (data/evidence/ git-ignored):
+python src/main.py evidence data/input/face.jpg
+
+# 3) anchor the fingerprint on EvidenceRegistry.sol:
+#    --key is optional: omit it and the CLI writes an unsigned
+#    data/evidence/anchor_request.json for an external signer; supply
+#    --key <hex> to sign + broadcast directly.
+python src/main.py blockchain anchor data/input/face.jpg --key <owner-privkey> --rpc <rpc> --contract <addr>
+
+# 4) independently re-verify on-chain (read-only eth_call):
+python src/main.py blockchain verify data/input/face.jpg --rpc <rpc> --contract <addr>
+
+# 5) deploy the contract:
+npx hardhat run scripts/deploy.js --network localhost  # local dev node, no secrets
+npx hardhat run scripts/deploy.js --network amoy       # needs POLYGON_AMOY_RPC_URL + PRIVATE_KEY (.env, git-ignored)
+```
+
+The evidence fingerprint is `SHA-256(image bytes)`. Any byte change produces a
+different hash that the on-chain record no longer matches — tampering is
+detectable by re-hashing off-chain and calling `isRecorded(hash)`.
+
 ---
 
 ## Tests
 
 ```bash
-# Matcher math only — no model, no images, always runs:
+# Matcher math only — no model, no images, always runs (NumPy):
 python test/test_matcher.py
 
 # Full pipeline on real faces — supply samples/test/samples/*.jpg first:
 python test/test_phase1_e2e.py
 
-# Phase 2 consent gate — auto-discovers real face samples in test/samples/;
-# isolated temp registries. Skipped (not failed) if samples are absent:
+# Phase 2 consent gate — auto-discovers real face samples; isolated temp
+# registries. Skipped (not failed) if samples are absent:
 python test/test_phase2_consent.py
+
+# Phase 3 evidence + blockchain clients (offline, no node needed):
+python test/test_evidence.py
+python test/test_blockchain_client.py
+
+# Phase 3 contract (JS — requires `npm install` first):
+npx hardhat compile
+npx hardhat test
 ```
 
 ### Test fixtures
@@ -188,13 +226,27 @@ under the system temp dir — `data/consent_registry.json` is never read or
 written. The empty-registry test additionally uses a synthetic black placeholder
 to verify a face is **never embedded** when nobody is enrolled (fail closed).
 
+`test/test_evidence.py` covers the pure-stdlib SHA-256 fingerprinting, payload
+hashing, and the tamper demo (flip a byte → hash changes). No model, no network,
+always runs offline.
+
+`test/test_blockchain_client.py` covers calldata encoding (selectors + args),
+offline transaction signing/recovery, the `eth_call` request shape, and the
+unsigned-anchor path. It monkey-patches the JSON-RPC layer, so it runs
+offline with no node. The full on-chain round-trip (sign → mine → verify) is
+exercised by `test/EvidenceRegistry.test.js` under Hardhat instead.
+
 ---
 
 ## Phases (in order, each confirmed before building)
 
-1. **Face scan** — detect + 512-dim embedding (✅ this checkpoint).
-2. **Consent gate + live search** — enroll subjects, fail-closed refusal below 0.60 cosine,
-   reverse-image search approved scope, verify candidates (✅ consent gate live & tested;
-   web search pending Phase 3).
-3. **Evidence + chain** — SHA-256 fingerprint, Solidity Hardhat contract on
-   Polygon Amoy, on-chain upload + independent re-verification, tamper demo.
+1. **Face scan** — detect + 512-dim embedding (✅ checkpoint).
+2. **Consent gate + live search** — enroll subjects, fail-closed refusal below 0.60 cosine (✅
+   consent gate live & tested; web reverse-image search **deferred** — Phase 2 layer not built).
+3. **Evidence + chain** — SHA-256 fingerprint, Solidity Hardhat contract on Polygon Amoy, on-chain
+   upload + independent re-verification, tamper demo
+   (✅ **locally verified end-to-end** on a Hardhat node: a real signed `addRecord`
+   transaction was mined, `verify`/`isRecorded` `eth_call` returns `RECORDED`, and a
+   byte-flip tamper produces a different fingerprint that is `UNRECORDED`; **Amoy
+   deployment is opt-in** — it requires a funded `POLYGON_AMOY_RPC_URL` + `PRIVATE_KEY`
+   in the git-ignored `.env` and an explicit `veritrace blockchain deploy --network amoy`).

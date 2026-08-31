@@ -19,6 +19,8 @@ dist/
 
 # Node / Hardhat (Phase 3)
 node_modules/
+artifacts/
+cache/
 contracts/artifacts/
 contracts/cache/
 coverage/

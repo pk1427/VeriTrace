@@ -1,0 +1,20 @@
+{
+  "name": "veritrace-hardhat",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hardhat tooling for VeriTrace EvidenceRegistry.sol (Phase 3).",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "node": "hardhat node",
+    "deploy:amoy": "hardhat run scripts/deploy.js --network amoy",
+    "deploy:local": "hardhat run scripts/deploy.js --network localhost"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-chai-matchers": "^2.1.2",
+    "@nomicfoundation/hardhat-ethers": "^3.0.2",
+    "chai": "^4.4.2",
+    "ethers": "^6.13.5",
+    "hardhat": "^2.22.7"
+  }
+}
