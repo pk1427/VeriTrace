@@ -41,13 +41,57 @@ export function runVeriTraceCmd(
   const pyBin = resolvePython();
   const cli = veritraceCliPath();
   const argv = [cli, command, ...args];
+  return _spawnCollected(pyBin, argv, opts);
+}
+
+/**
+ * Run a raw `python -c "<expression>"` (no `src/main.py` prefix). Same
+ * timeout / collection semantics as `runVeriTraceCmd`. Prefer
+ * `runPythonScript` for multi-line expressions; `-c` with semicolon-joined
+ * Python is fragile across shells.
+ */
+export function runPythonExpression(
+  expression: string,
+  opts?: { timeoutMs?: number },
+): Promise<VeriTraceResult> {
+  const pyBin = resolvePython();
+  const argv = ["-c", expression];
+  return _spawnCollected(pyBin, argv, { cwd: REPO_ROOT, ...opts });
+}
+
+/**
+ * Run a Python script file (`python <scriptPath>`). Used by the read-only
+ * `/api/registry` summary route so the multi-line expression lives in a
+ * file rather than a fragile `-c` one-liner. cwd is forced to REPO_ROOT so
+ * `from src...` imports resolve.
+ */
+export function runPythonScript(
+  scriptPath: string,
+  opts?: { timeoutMs?: number },
+): Promise<VeriTraceResult> {
+  const pyBin = resolvePython();
+  const argv = [scriptPath];
+  return _spawnCollected(pyBin, argv, { cwd: REPO_ROOT, ...opts });
+}
+
+function _spawnCollected(
+  pyBin: string,
+  argv: string[],
+  opts?: { timeoutMs?: number; cwd?: string },
+): Promise<VeriTraceResult> {
   const timeoutMs = opts?.timeoutMs ?? 120_000;
   const start = Date.now();
 
   return new Promise((resolve) => {
     const child = spawn(pyBin, argv, {
       cwd: REPO_ROOT,
-      env: { ...process.env },
+      // Prepend REPO_ROOT to PYTHONPATH so `from src...` imports resolve
+      // even when the script lives in /tmp (Python adds the script's
+      // directory to sys.path[0], which otherwise shadows cwd-based imports).
+      env: {
+        ...process.env,
+        PYTHONPATH: REPO_ROOT + (process.env.PYTHONPATH ? ":" + process.env.PYTHONPATH : ""),
+      },
       windowsHide: true,
     });
 
