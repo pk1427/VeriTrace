@@ -15,6 +15,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { runPythonScript } from "@/lib/runPythonCmd";
+import { DEMO_REGISTRY_RELATIVE_PATH } from "@/lib/demo";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +24,7 @@ import json
 import sys
 from src.consent.registry import load_registry
 
-reg = load_registry()
+reg = load_registry("${DEMO_REGISTRY_RELATIVE_PATH}")
 out = {
     "version": reg.get("version"),
     "match_threshold": reg.get("match_threshold"),

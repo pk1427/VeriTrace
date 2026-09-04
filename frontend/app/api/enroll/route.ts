@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
 import { handleFileCmd } from "@/lib/api";
+import { DEMO_REGISTRY_RELATIVE_PATH } from "@/lib/demo";
 
 /**
  * POST /api/enroll  — enroll an owner-owned face into the local consent
@@ -25,9 +26,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         args.push("--allowed-domains", domains);
       }
       const registry = String(form.get("registry") ?? "").trim();
-      if (registry) {
-        args.push("--registry", registry);
-      }
+      args.push("--registry", registry || DEMO_REGISTRY_RELATIVE_PATH);
       return args;
     },
     { timeoutMs: 180_000 },

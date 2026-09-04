@@ -41,6 +41,7 @@ data/evidence/*
 # Local consent registry — stores owner face embeddings (biometric data).
 # Keep it LOCAL only; never commit. Use consent_registry.example.json as a template.
 data/consent_registry.json
+data/demo_consent_registry.json
 veritrace-507220-bc47478b5c0a.json
 
 # Real face photos used for the Phase 1 e2e threshold test — keep these LOCAL
