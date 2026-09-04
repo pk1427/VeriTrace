@@ -763,6 +763,11 @@ def cmd_full(args: argparse.Namespace) -> int:
     _print("=" * 72)
     _print(f"[stage 1/5] consent gate + multi-provider search")
     res = _run_search(args)
+    if res.gate_open:
+        _print(
+            f"[veritrace] consent     : GRANTED — subject={res.subject_id} "
+            f"score={float(res.best_score or 0):.4f} >= {res.threshold:.4f}"
+        )
     _print_diagnostic(res)
     if not res.gate_open:
         _print("[veritrace] full        : REFUSED — consent gate closed")

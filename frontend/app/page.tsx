@@ -12,10 +12,10 @@ const EXPLORER_URL = "https://amoy.polygonscan.com/address/0x6650630946313835E5a
 
 function outputOf(data: CommandResult | null) { return data?.raw?.stdout ?? data?.raw?.stderr ?? data?.error ?? ""; }
 function parseFull(stdout: string): Milestone[] {
-  const consent = stdout.match(/consent: GRANTED[^\n]*/i)?.[0] ?? "Consent gate did not open";
+  const consent = stdout.match(/consent\s*:\s*GRANTED[^\n]*/i)?.[0] ?? "Consent gate did not open";
   const found = stdout.match(/\+\s+(\S+)\s+(https?:\/\/\S+).*similarity=([\d.-]+).*\[VERIFIED\]/)?.slice(1);
   const hash = stdout.match(/canonical\s+: sha256=([a-f0-9]{64})/i)?.[1];
-  const recorded = /recorded\s+: True/i.test(stdout);
+  const recorded = /recorded\s*(?:=|:)\s*True/i.test(stdout);
   const integrity = /INTEGRITY CONFIRMED/i.test(stdout);
   return [
     { label: "Consent gate", detail: consent, ok: /GRANTED/i.test(consent) },
