@@ -1,9 +1,21 @@
 """Phase 3 on-chain evidence anchoring + independent re-verification.
 
-Builds contract calldata, signs raw transactions (offline), and issues
-read-only ``eth_call`` queries against ``EvidenceRegistry.sol``. Signing is
-offline and unit-tested without a node; sending / verifying requires a
-JSON-RPC endpoint and a configured owner key (see ``.env.example``).
+Two anchoring flows are supported:
+
+1. **Legacy image-fingerprint anchor** — ``anchor_evidence`` /
+   ``verify_onchain``. Anchors the SHA-256 of the evidence image
+   itself (``image_sha256``). Kept for backwards compatibility.
+
+2. **Canonical-bundle anchor** — ``anchor_canonical_evidence`` /
+   ``verify_canonical_evidence``. Anchors the SHA-256 of the
+   canonical JSON evidence bundle produced by
+   :class:`src.evidence.MatchEvidence`. The on-chain commitment is
+   the canonical-bundle hash so any change to any field of the
+   bundle makes re-verification fail.
+
+Signing is offline and unit-tested without a node; sending / verifying
+requires a JSON-RPC endpoint and a configured owner key (see
+``.env.example``).
 
 Security: anchoring and verification are always performed **after** the Phase 2
 consent gate (``check_consent``) has granted the input face to an enrolled
@@ -13,6 +25,7 @@ the CLI enforcement.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
@@ -21,7 +34,13 @@ from eth_abi import decode as abi_decode
 from eth_abi import encode as abi_encode
 from eth_hash.auto import keccak
 
-from src.evidence import EvidenceRecord, build_evidence_record, subject_id_to_bytes32_hex
+from src.evidence import (
+    EvidenceRecord,
+    MatchEvidence,
+    build_evidence_record,
+    build_match_evidence,
+    subject_id_to_bytes32_hex,
+)
 
 try:
     from eth_account import Account
@@ -268,3 +287,169 @@ def verify_onchain(sha256_hex: str, contract: str, rpc_url: str) -> dict:
         except Exception:
             record = None
     return {"is_recorded": recorded, "record": record}
+
+
+# --------------------------------------------------------------------------- #
+# Canonical evidence (best-verified-match) anchor + verify
+# --------------------------------------------------------------------------- #
+
+
+def anchor_canonical_evidence(
+    evidence: MatchEvidence,
+    contract: str,
+    rpc_url: str,
+    private_key: Optional[str] = None,
+    out_dir: Optional[Path] = None,
+) -> dict:
+    """Anchor the canonical-bundle SHA-256 of a :class:`MatchEvidence`.
+
+    The on-chain commitment is ``evidence.canonical_sha256()``, which
+    is the SHA-256 of the deterministic canonical JSON bundle (page
+    URL, image hash, similarity, threshold, fetch_mode,
+    discovery_sources, query image hash, etc.). Any change to any
+    field makes the canonical hash change, so re-verification fails.
+
+    Like the legacy flow, if no ``private_key`` is supplied the
+    function writes an ``anchor_request.json`` (including the full
+    canonical bundle + calldata) for an external signer.
+    """
+    bundle = evidence.to_bundle()
+    bundle_bytes = evidence.to_canonical_bytes()
+    bundle_sha = evidence.canonical_sha256()
+    subject_id_bytes32 = subject_id_to_bytes32_hex(evidence.match_page_url)
+    data = ADD_RECORD_SELECTOR + abi_encode(
+        ["bytes32", "bytes32"],
+        [bytes.fromhex(subject_id_bytes32), bytes.fromhex(bundle_sha)],
+    )
+
+    # Persist the canonical bundle alongside the request / receipt so
+    # independent re-verification has a single source of truth.
+    out_dir = Path(out_dir) if out_dir else Path("data") / "evidence"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    bundle_path = out_dir / f"match_evidence_{bundle_sha[:16]}.json"
+    bundle_path.write_bytes(bundle_bytes)
+
+    payload = {
+        "schema_version": evidence.schema_version,
+        "bundle_sha256": bundle_sha,
+        "subject_id_bytes32": "0x" + subject_id_bytes32,
+        "contract": contract,
+        "chain_id": CHAIN_DEFAULT,
+        "calldata": "0x" + data.hex(),
+        "selector": "0x" + ADD_RECORD_SELECTOR.hex(),
+        "bundle": bundle,
+        "bundle_file": str(bundle_path),
+    }
+    if private_key is None:
+        req_path = out_dir / ANCHOR_REQUEST_FILENAME
+        req_path.write_text(json.dumps(payload, indent=2))
+        payload["_request_file"] = str(req_path)
+        payload["_status"] = "pending_signer"
+        return payload
+
+    # Re-running the demo must be safe.  The registry intentionally rejects
+    # duplicate writes, but a duplicate is still a successful integrity
+    # outcome when this exact canonical bundle is already recorded.  Check
+    # before signing so a second run neither spends gas nor reports a false
+    # failure to the operator.
+    already_recorded = abi_decode(
+        ["bool"], eth_call(contract, encode_is_recorded(bundle_sha), rpc_url)
+    )[0]
+    if already_recorded:
+        payload["_status"] = "already_recorded"
+        return payload
+
+    Account = _require_account()
+    acct = Account.from_key(private_key)
+    nonce = _nonce(acct.address, rpc_url)
+    tx = {
+        "nonce": nonce,
+        "gas": GAS_LIMIT_ANCHOR,
+        "gasPrice": _gas_price(rpc_url),
+        "to": contract,
+        "data": "0x" + data.hex(),
+        "value": 0,
+        "chainId": _chain_id(rpc_url),
+    }
+    signed = Account.sign_transaction(tx, private_key)
+    send = _rpc(
+        {"jsonrpc": "2.0", "method": "eth_sendRawTransaction",
+         "params": ["0x" + signed.raw_transaction.hex()], "id": 1},
+        rpc_url,
+    )
+    tx_hash = send["result"]
+    receipt = _wait_for_receipt(tx_hash, rpc_url)
+    ok = receipt.get("status") == "0x1"
+    payload["tx_hash"] = tx_hash
+    payload["block_number"] = int(receipt["blockNumber"], 16)
+    payload["gas_used"] = int(receipt["gasUsed"], 16)
+    payload["_status"] = "mined" if ok else "reverted"
+    if not ok:
+        raise RuntimeError(f"canonical-anchor tx reverted: {tx_hash}")
+    return payload
+
+
+def verify_canonical_evidence(
+    evidence: MatchEvidence,
+    contract: str,
+    rpc_url: str,
+) -> dict:
+    """Independent re-verification of a :class:`MatchEvidence`.
+
+    Recomputes the canonical SHA-256 locally, then checks whether
+    that hash is recorded on-chain in the EvidenceRegistry.
+
+    Returns a dict::
+
+        {
+          "local_sha256":         <hex>,
+          "is_recorded":          bool,
+          "onchain_sha256":       <hex> or None,
+          "subject_id_bytes32":   <hex> or None,
+          "submitter":            <addr> or None,
+          "created_at":           <int> or None,
+          "result":               "MATCH" or "TAMPER DETECTED" or "UNRECORDED",
+          "tampered":             bool,
+        }
+    """
+    local_sha = evidence.canonical_sha256()
+    # Use the page_url as the subject-id surrogate on-chain so the
+    # registry's per-subject uniqueness doesn't collide.
+    subject_id_bytes32 = subject_id_to_bytes32_hex(evidence.match_page_url)
+    is_recorded = abi_decode(
+        ["bool"], eth_call(contract, encode_is_recorded(local_sha), rpc_url)
+    )[0]
+    onchain_sha = None
+    submitter = None
+    created_at = None
+    if is_recorded:
+        try:
+            raw = eth_call(contract, encode_verify(local_sha), rpc_url)
+            subj, fp, ts, who = abi_decode(
+                ["bytes32", "bytes32", "uint256", "address"], raw
+            )
+            onchain_sha = "0x" + fp.hex()
+            submitter = who
+            created_at = int(ts)
+            subject_id_bytes32 = "0x" + subj.hex()
+        except Exception:
+            pass
+    if not is_recorded:
+        result = "UNRECORDED"
+        tampered = False
+    elif onchain_sha and onchain_sha.lower() == ("0x" + local_sha).lower():
+        result = "MATCH"
+        tampered = False
+    else:
+        result = "TAMPER DETECTED"
+        tampered = True
+    return {
+        "local_sha256": local_sha,
+        "is_recorded": bool(is_recorded),
+        "onchain_sha256": onchain_sha,
+        "subject_id_bytes32": subject_id_bytes32,
+        "submitter": submitter,
+        "created_at": created_at,
+        "result": result,
+        "tampered": bool(tampered),
+    }

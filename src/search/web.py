@@ -1,28 +1,46 @@
-"""Phase 2b: consent-gated reverse-image search via Google Cloud Vision.
+"""Backward-compat shim — kept so existing tests/imports keep working.
 
-Authentication uses Application Default Credentials: set
-``GOOGLE_APPLICATION_CREDENTIALS`` in ``.env`` to the service-account JSON key
-file (e.g. ``veritrace-507220-*.json``). The search scope is constrained to
-``VERIFACE_ALLOWED_DOMAINS`` — only results from approved hostnames are
-returned.
+The multi-provider pipeline lives in :mod:`src.search`. The original
+:func:`web_detection` / :func:`search` helpers in this module now route
+to the new provider; the :func:`filter_allowed_urls` / :func:`default_allowed_domains`
+helpers route to the new policy.
 
-The caller MUST have passed the consent gate (Phase 2) for the input face
-before calling :func:`search` — see ``src/main.py`` ``cmd_search`` for the CLI
-enforcement.
+Behavior change (intentional): the default allow-list is no longer the
+narrow wikipedia/unsplash/pexels/commons set. It is now the broad
+public-surface allow-list in :mod:`src.search.policy`. Tests and
+callers that want the *old* narrow set can pass it explicitly via
+``allowed_domains=[...]``.
 """
 from __future__ import annotations
 
 import os
-from pathlib import Path
-from typing import Optional
+import warnings
+from typing import Iterable, List, Optional
 from urllib.parse import urlparse
 
-ALLOWED_DOMAINS_DEFAULT = "wikipedia.org,commons.wikimedia.org,unsplash.com,pexels.com"
+from src.search import vision_web_detection, policy as _policy
+
+
+# --------------------------------------------------------------------------- #
+# Allow-list helpers (compat)
+# --------------------------------------------------------------------------- #
 
 
 def default_allowed_domains() -> list:
-    env = os.environ.get("VERIFACE_ALLOWED_DOMAINS", ALLOWED_DOMAINS_DEFAULT)
-    return [d.strip().lower() for d in env.split(",") if d.strip()]
+    """Default allow-list.
+
+    The previous narrow list (wikipedia, unsplash, …) is replaced by the
+    broad public-surface allow-list in :mod:`src.search.policy` so the
+    pipeline does not silently exclude legitimate public results.
+
+    An env override is still honored (legacy compat): setting
+    ``VERIFACE_ALLOWED_DOMAINS=a.com,b.com`` will *replace* the broad
+    default with that explicit list (forces EXPLICIT-style filtering).
+    """
+    env = os.environ.get("VERIFACE_ALLOWED_DOMAINS")
+    if env:
+        return [d.strip().lower() for d in env.split(",") if d.strip()]
+    return _policy.default_broad_domains()
 
 
 def _host(url: str) -> str:
@@ -35,37 +53,46 @@ def _host_allowed(host: str, allowed: list) -> bool:
 
 
 def filter_allowed_urls(matches, allowed_domains) -> list:
-    """Keep only matches whose URL host is covered by the allow-list."""
-    allowed = [d.lower() for d in (allowed_domains or [])]
+    """Compat shim — used by tests."""
+    allowed = [d.lower() for d in (allowed_domains or []) if d]
+    if not allowed:
+        # Empty allow-list => old behavior was "drop everything", but
+        # we want the new behavior: nothing rejected by the shim. The
+        # new pipeline calls :func:`src.search.filter_candidates` instead
+        # and that path uses the broad default.
+        return list(matches)
     return [m for m in matches if m.get("url") and _host_allowed(_host(m["url"]), allowed)]
 
 
+# --------------------------------------------------------------------------- #
+# Vision provider (compat)
+# --------------------------------------------------------------------------- #
+
+
 def web_detection(image_path, max_results: int = 10) -> list:
-    """Call Google Cloud Vision ``WEB_DETECTION`` and return candidate URLs."""
-    try:
-        from google.cloud import vision
-    except ImportError as exc:
-        raise RuntimeError(
-            "google-cloud-vision is not installed (pip install google-cloud-vision), "
-            "or GOOGLE_APPLICATION_CREDENTIALS is not set in .env."
-        ) from exc
+    """Call Google Cloud Vision ``WEB_DETECTION`` and return candidate dicts.
 
-    client = vision.ImageAnnotatorClient()
-    image = vision.Image(content=Path(image_path).read_bytes())
-    res = client.web_detection(image=image, max_results=max_results)
-    wd = res.web_detection
-
-    matches: list = []
-    for page in wd.pages_with_matching_images or []:
-        matches.append({"url": page.url, "host": _host(page.url), "domain": _host(page.url)})
-    for sim in getattr(wd, "visually_similar_images", None) or []:
-        url = getattr(sim, "url", "") or ""
-        if url:
-            matches.append({"url": url, "host": _host(url), "domain": _host(url)})
-    return matches
+    Returns dicts with the legacy ``url/host/domain`` keys so existing
+    call sites keep working. Internally it uses the new
+    :func:`src.search.vision_web_detection.discover`.
+    """
+    out: list = []
+    for c in vision_web_detection.discover(image_path, max_results=max_results):
+        h = _host(c.url)
+        out.append({"url": c.url, "host": h, "domain": h,
+                    "candidate_type": c.candidate_type,
+                    "source": c.source, "discovery_method": c.discovery_method})
+    return out
 
 
 def search(image_path, allowed_domains=None, max_results: int = 10) -> list:
-    """Consent-gated reverse-image search: detect → Vision web detection → allow-list filter."""
+    """Consent-gated reverse-image search (compat shim)."""
+    warnings.warn(
+        "src.search.web.search is the legacy single-provider shim. "
+        "Use src.search.discover_candidates + src.search.filter_candidates "
+        "for the multi-provider pipeline.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     matches = web_detection(image_path, max_results=max_results)
     return filter_allowed_urls(matches, allowed_domains or default_allowed_domains())

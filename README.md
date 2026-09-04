@@ -16,13 +16,13 @@ independent re-verification.
 > If no matching enrolled face is found, the program refuses to proceed and
 > prints a clear refusal message.
 
-Phase 1 (this checkpoint) performs **local detection + embedding only** — there
-is no web search path at all yet, so the constraint is trivially satisfied.
-Phase 2 adds the consent gate; later phases wire in the live search.
+The completed pipeline is: **face scan → consent gate → live reverse-image
+search → face verification of discovered public content → canonical evidence
+bundle → Polygon Amoy anchor → independent on-chain re-verification**.
 
 ---
 
-## Phase 1 status (face in -> embedding out)
+## Face detection and encoding
 
 CLI:
 
@@ -61,10 +61,10 @@ veritrace/
 │   │   ├── detector.py         # bounding-box detection
 │   │   ├── encoder.py          # 512-dim embedding (+ bbox-scoped encoding)
 │   │   └── matcher.py          # cosine similarity + match()
-│   ├── consent/registry.py     # Phase 2 stub (not wired in yet)
-│   ├── search/                 # Phase 2
-│   ├── evidence/               # Phase 3
-│   └── blockchain/             # Phase 3
+│   ├── consent/registry.py     # fail-closed consent gate
+│   ├── search/                 # live multi-provider reverse-image search
+│   ├── evidence/               # canonical tamper-evident evidence
+│   └── blockchain/             # Polygon Amoy anchoring and verification
 ├── test/
 │   ├── test_matcher.py         # synthetic >0.6 / <0.4 gate math (runs offline)
 │   ├── test_phase1_e2e.py      # real-image e2e thresholds (skipped if no images)
@@ -118,8 +118,8 @@ On an image with **no detectable face**, `scan` refuses locally:
 refusal: no face detected in the supplied image — nothing to embed.
 ```
 
-(Phase 1 has no web search, so there is no unenrolled-face search path to gate
-yet; the consent gate lands in Phase 2, before any search API is wired up.)
+All search and blockchain commands below invoke the consent gate first. An
+unenrolled or non-matching input is refused before any external provider is called.
 
 ### Phase 2 — consent gate
 
@@ -140,6 +140,23 @@ python src/main.py check  data/input/face.jpg                   # fail-closed at
 The gate is **fail-closed**: if the registry is empty, no face is detected, or the
 best match is below `0.60`, the face is refused. `scan` remains a Phase-1 tool
 (embedding only) and does not enroll or check consent.
+
+### End-to-end demo command
+
+With a consented subject enrolled and `.env` configured with Google Cloud Vision
+credentials plus the Polygon contract/RPC settings, run:
+
+```bash
+python src/main.py full test/samples/your_photo1.jpeg \
+  --providers vision_web_detection \
+  --rpc https://polygon-amoy-bor-rpc.publicnode.com
+```
+
+`full` performs live input-driven web discovery, verifies the discovered image
+against the input face, hashes the deterministic evidence bundle, anchors it on
+Polygon Amoy (or detects that the exact bundle is already anchored), and then
+independently re-checks the on-chain record. A successful final result prints
+`INTEGRITY CONFIRMED`.
 
 ```bash
 # Phase 2 consent-gate tests (isolated temp registries, never touch the real one):
